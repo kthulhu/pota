@@ -37,6 +37,7 @@ struct PotaBokehAOVData
   int yres;
   int samples;
   std::map<AtString, std::vector<AtRGBA>> image_buffers;
+  std::map<AtString, int> image_buffers_written;
 };
  
 
@@ -89,7 +90,6 @@ node_update
   while (!AiAOVIteratorFinished(aov_iterator))
   {
     const AtAOVEntry* aov_entry = AiAOVIteratorGetNext(aov_iterator);
-    // this should in theory be able to get all the active aov's
     AiMsgInfo("aov_entry: %s", aov_entry->name.c_str());
 
     // register extra aovs, ugly string conversions can be improved
@@ -102,8 +102,9 @@ node_update
 
     // create image buffers, currently probably creating a lot of them...
     std::vector<AtRGBA> current_buffer;
-    current_buffer.reserve(bokeh_data->xres * bokeh_data->yres);
+    //current_buffer.reserve(bokeh_data->xres * bokeh_data->yres);
     bokeh_data->image_buffers.insert(std::make_pair(aov_entry->name, current_buffer));
+    bokeh_data->image_buffers[aov_entry->name].reserve(bokeh_data->xres * bokeh_data->yres);
   }
   AiAOVIteratorDestroy(aov_iterator);
 }
@@ -115,37 +116,31 @@ node_finish
   const MyCameraData *camera_data = (MyCameraData*)AiNodeGetLocalData(AiUniverseGetCamera());
 
 
-  AtAOVIterator* aov_iterator = AiUniverseGetAOVIterator();
-  while (!AiAOVIteratorFinished(aov_iterator))
+  int aa_square = bokeh_data->aa_samples * bokeh_data->aa_samples;
+
+  for (auto const& buffer : bokeh_data->image_buffers_written)
   {
-    const AtAOVEntry* aov_entry = AiAOVIteratorGetNext(aov_iterator);
-
-    //image_buffers.insert(std::make_pair(aov_entry->name, current_buffer));
-
     std::vector<float> image(bokeh_data->yres * bokeh_data->xres * 4);
     int offset = -1;
     int pixelnumber = 0;
-    int aa_square = bokeh_data->aa_samples * bokeh_data->aa_samples;
-
+    
     for(auto i = 0; i < bokeh_data->xres * bokeh_data->yres; i++){
-      image[++offset] = bokeh_data->image_buffers[aov_entry->name][pixelnumber].r / (float)aa_square;
-      image[++offset] = bokeh_data->image_buffers[aov_entry->name][pixelnumber].g / (float)aa_square;
-      image[++offset] = bokeh_data->image_buffers[aov_entry->name][pixelnumber].b / (float)aa_square;
-      image[++offset] = bokeh_data->image_buffers[aov_entry->name][pixelnumber].a / (float)aa_square;
+      image[++offset] = bokeh_data->image_buffers[buffer.first][pixelnumber].r / (float)aa_square;
+      image[++offset] = bokeh_data->image_buffers[buffer.first][pixelnumber].g / (float)aa_square;
+      image[++offset] = bokeh_data->image_buffers[buffer.first][pixelnumber].b / (float)aa_square;
+      image[++offset] = bokeh_data->image_buffers[buffer.first][pixelnumber].a / (float)aa_square;
       ++pixelnumber;
     }
 
     // replace frame numbering
     std::string original_string = camera_data->bokeh_exr_path.c_str();
     replace_frame_numbering(original_string);
-    add_aov_suffix(original_string, aov_entry->name);
+    add_aov_suffix(original_string, buffer.first);
+    original_string += ".exr";
     SaveEXR(image.data(), bokeh_data->xres, bokeh_data->yres, 4, 0, original_string.c_str());
     AiMsgWarning("[POTA] Bokeh AOV written to %s", original_string.c_str());  
   }
-  AiAOVIteratorDestroy(aov_iterator);
 
-
-  
 
   delete bokeh_data;
 }
@@ -246,6 +241,7 @@ shader_evaluate
             const AtAOVEntry* aov_entry = AiAOVIteratorGetNext(aov_iterator);
             if (AiAOVEnabled(aov_entry->name, aov_entry->type)){
               bokeh_data->image_buffers[aov_entry->name][pixelnumber] += sample_energy_per_aov[aov_entry->name];
+              bokeh_data->image_buffers_written[aov_entry->name] = 1;
             }
           }
           
